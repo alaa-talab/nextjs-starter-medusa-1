@@ -2,7 +2,10 @@ import { Region } from "@medusajs/medusa"
 import { notFound } from "next/navigation"
 import { NextRequest, NextResponse } from "next/server"
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL
+// Ensure BACKEND_URL is correctly set from the environment
+const BACKEND_URL = process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL || "http://localhost:9000";
+console.log("Backend URL:", BACKEND_URL);  // Make sure this is not undefined
+
 const DEFAULT_REGION = process.env.NEXT_PUBLIC_DEFAULT_REGION || "us"
 
 const regionMapCache = {
@@ -13,23 +16,28 @@ const regionMapCache = {
 async function getRegionMap() {
   const { regionMap, regionMapUpdated } = regionMapCache
 
-  if (
-    !regionMap.keys().next().value ||
-    regionMapUpdated < Date.now() - 3600 * 1000
-  ) {
-    // Fetch regions from Medusa. We can't use the JS client here because middleware is running on Edge and the client needs a Node environment.
-    const { regions } = await fetch(`${BACKEND_URL}/store/regions`, {
+  // Cache invalidation after 1 hour
+  if (!regionMap.keys().next().value || regionMapUpdated < Date.now() - 3600 * 1000) {
+    // Fetch regions from Medusa. Ensure fetch works and responds with regions data.
+    const response = await fetch(`${BACKEND_URL}/store/regions`, {
       next: {
         revalidate: 3600,
         tags: ["regions"],
       },
-    }).then((res) => res.json())
+    })
+
+    // Handle error if fetch fails
+    if (!response.ok) {
+      throw new Error(`Failed to fetch regions: ${response.statusText}`)
+    }
+
+    const { regions } = await response.json()
 
     if (!regions) {
       notFound()
     }
 
-    // Create a map of country codes to regions.
+    // Map country codes to regions.
     regions.forEach((region: Region) => {
       region.countries.forEach((c) => {
         regionMapCache.regionMap.set(c.iso_2, region)
@@ -98,7 +106,7 @@ export async function middleware(request: NextRequest) {
   const urlHasCountryCode =
     countryCode && request.nextUrl.pathname.split("/")[1].includes(countryCode)
 
-  // check if one of the country codes is in the url
+  // check if one of the country codes is in the URL
   if (
     urlHasCountryCode &&
     (!isOnboarding || onboardingCookie) &&
@@ -122,7 +130,7 @@ export async function middleware(request: NextRequest) {
     response = NextResponse.redirect(`${redirectUrl}`, 307)
   }
 
-  // If a cart_id is in the params, we set it as a cookie and redirect to the address step.
+  // If a cart_id is in the params, set it as a cookie and redirect to the address step.
   if (cartId && !checkoutStep) {
     redirectUrl = `${redirectUrl}&step=address`
     response = NextResponse.redirect(`${redirectUrl}`, 307)
